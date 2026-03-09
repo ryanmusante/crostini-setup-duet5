@@ -26,6 +26,7 @@ readonly STEP_FILE="${HOME}/.crostini-setup-checkpoint"
 readonly LOCK_FILE="${HOME}/.crostini-setup.lock"
 _cros_uid="$(id -u)"
 readonly CROS_UID="$_cros_uid"
+unset _log_ts _cros_uid
 
 DRY_RUN=false
 
@@ -129,7 +130,7 @@ run_shell() {
         return 0
     fi
     log "[EXEC] $1"
-    bash -c "$1" >> "$LOG_FILE" 2>&1
+    bash -c "set -eo pipefail; $1" >> "$LOG_FILE" 2>&1
     local rc=$?
     [[ $rc -ne 0 ]] && warn "Shell command exited $rc: $1"
     return $rc
@@ -266,9 +267,9 @@ if should_run_step 1; then
 
     # 1c. Debian version
     if [[ -f /etc/os-release ]]; then
-        # shellcheck source=/dev/null
-        source /etc/os-release
-        log "Container OS: ${PRETTY_NAME:-unknown} ✓"
+        _os_pretty="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-unknown}")"
+        log "Container OS: ${_os_pretty} ✓"
+        unset _os_pretty
     fi
 
     # 1d. Disk space check (need at least 2 GB free)
@@ -1037,17 +1038,17 @@ if should_run_step 14; then
         log "VS Code already installed: $(code --version 2>&1 | head -1)"
     else
         log "Downloading VS Code arm64 .deb..."
-        _VSCODE_DEB="$(mktemp /tmp/vscode-arm64-XXXXXX.deb)"
+        _VSCODE_DEB="/tmp/vscode-arm64-$$.deb"
         run curl -fSL "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-arm64" -o "${_VSCODE_DEB}"
 
         if [[ -f "$_VSCODE_DEB" ]]; then
             run sudo dpkg -i "$_VSCODE_DEB" || run sudo apt install -f -y
-            run rm -f "$_VSCODE_DEB"
             log "VS Code installed ✓"
         else
             warn "VS Code download failed. Install manually:"
             warn "  https://code.visualstudio.com/download (select ARM64 .deb)"
         fi
+        rm -f "$_VSCODE_DEB" 2>/dev/null
     fi
 
     # VS Code Wayland flags for better rendering on Crostini
@@ -1075,7 +1076,10 @@ if should_run_step 15; then
     # 15a. Increase inotify watchers (VS Code and file-heavy tools need this)
     readonly SYSCTL_CONF="/etc/sysctl.d/99-crostini-tuning.conf"
     if [[ ! -f "$SYSCTL_CONF" ]]; then
-        run_shell "echo 'fs.inotify.max_user_watches=524288' | sudo tee '${SYSCTL_CONF}' > /dev/null"
+        write_file_sudo "$SYSCTL_CONF" <<'EOF'
+fs.inotify.max_user_watches=524288
+EOF
+        run sudo chmod 644 "$SYSCTL_CONF"
         run sudo sysctl --system || warn "sysctl apply failed"
         log "inotify watchers increased to 524288"
     else
@@ -1248,210 +1252,213 @@ fi
 # ═════════════════════════════════════════════════════════════════════════════
 #  STEP 19: Summary and verification
 # ═════════════════════════════════════════════════════════════════════════════
-step_banner 19 "Summary and verification"
+if should_run_step 19; then
+    step_banner 19 "Summary and verification"
 
-printf '%b┌──────────────────────────────────────────────────────────┐%b\n' "$GREEN" "$RESET"
-printf '%b│              CROSTINI SETUP COMPLETE                     │%b\n' "$GREEN" "$RESET"
-printf '%b└──────────────────────────────────────────────────────────┘%b\n' "$GREEN" "$RESET"
-printf '\n'
-
-# ── System ───────────────────────────────────────────────────────────────────
-printf '%bSystem:%b\n' "$BOLD" "$RESET"
-printf '  Architecture:  %s\n' "$(uname -m)"
-printf '  Kernel:        %s\n' "$(uname -r)"
-printf '  OS:            %s\n' "$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')"
-printf '  Disk free:     %s MB\n' "$(($(df --output=avail / | tail -1 | tr -d ' ') / 1024))"
-printf '\n'
-
-# ── GPU ──────────────────────────────────────────────────────────────────────
-printf '%bGPU / Graphics:%b\n' "$BOLD" "$RESET"
-if [[ -e /dev/dri/renderD128 ]]; then
-    printf '  Render node:   %b✓%b /dev/dri/renderD128\n' "$GREEN" "$RESET"
-    if command -v glxinfo &>/dev/null; then
-        GL_VENDOR="$(glxinfo 2>/dev/null | grep "OpenGL vendor" | head -1 | cut -d: -f2 | xargs || true)"
-        GL_RENDERER="$(glxinfo 2>/dev/null | grep "OpenGL renderer" | head -1 | cut -d: -f2 | xargs || true)"
-        GL_VERSION="$(glxinfo 2>/dev/null | grep "OpenGL version" | head -1 | cut -d: -f2 | xargs || true)"
-        [[ -n "$GL_VENDOR" ]]   && printf '  GL vendor:     %s\n' "$GL_VENDOR"
-        [[ -n "$GL_RENDERER" ]] && printf '  GL renderer:   %s\n' "$GL_RENDERER"
-        [[ -n "$GL_VERSION" ]]  && printf '  GL version:    %s\n' "$GL_VERSION"
+    printf '%b┌──────────────────────────────────────────────────────────┐%b\n' "$GREEN" "$RESET"
+    printf '%b│              CROSTINI SETUP COMPLETE                     │%b\n' "$GREEN" "$RESET"
+    printf '%b└──────────────────────────────────────────────────────────┘%b\n' "$GREEN" "$RESET"
+    printf '\n'
+    
+    # ── System ───────────────────────────────────────────────────────────────────
+    printf '%bSystem:%b\n' "$BOLD" "$RESET"
+    printf '  Architecture:  %s\n' "$(uname -m)"
+    printf '  Kernel:        %s\n' "$(uname -r)"
+    printf '  OS:            %s\n' "$(. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-unknown}")"
+    printf '  Disk free:     %s MB\n' "$(($(df --output=avail / | tail -1 | tr -d ' ') / 1024))"
+    printf '\n'
+    
+    # ── GPU ──────────────────────────────────────────────────────────────────────
+    printf '%bGPU / Graphics:%b\n' "$BOLD" "$RESET"
+    if [[ -e /dev/dri/renderD128 ]]; then
+        printf '  Render node:   %b✓%b /dev/dri/renderD128\n' "$GREEN" "$RESET"
+        if command -v glxinfo &>/dev/null; then
+            GL_VENDOR="$(glxinfo 2>/dev/null | grep "OpenGL vendor" | head -1 | cut -d: -f2 | xargs || true)"
+            GL_RENDERER="$(glxinfo 2>/dev/null | grep "OpenGL renderer" | head -1 | cut -d: -f2 | xargs || true)"
+            GL_VERSION="$(glxinfo 2>/dev/null | grep "OpenGL version" | head -1 | cut -d: -f2 | xargs || true)"
+            [[ -n "$GL_VENDOR" ]]   && printf '  GL vendor:     %s\n' "$GL_VENDOR"
+            [[ -n "$GL_RENDERER" ]] && printf '  GL renderer:   %s\n' "$GL_RENDERER"
+            [[ -n "$GL_VERSION" ]]  && printf '  GL version:    %s\n' "$GL_VERSION"
+        fi
+        if command -v vulkaninfo &>/dev/null; then
+            VK_GPU="$(vulkaninfo --summary 2>/dev/null | grep "GPU name" | head -1 | cut -d= -f2 | xargs || true)"
+            VK_API="$(vulkaninfo --summary 2>/dev/null | grep "apiVersion" | head -1 | cut -d= -f2 | xargs || true)"
+            if [[ -n "$VK_GPU" ]]; then
+                printf '  Vulkan GPU:    %s\n' "$VK_GPU"
+                [[ -n "$VK_API" ]] && printf '  Vulkan API:    %s\n' "$VK_API"
+            else
+                printf '  Vulkan:        not available (virgl does not support Vulkan)\n'
+            fi
+        fi
+    elif [[ -d /dev/dri ]]; then
+        printf '  Render node:   %b⚠ PARTIAL%b (/dev/dri exists, renderD128 missing)\n' "$YELLOW" "$RESET"
+    else
+        printf '  Render node:   %b✗ NOT ACTIVE%b\n' "$RED" "$RESET"
+        printf '  Fix:           chrome://flags/#crostini-gpu-support → Enabled → Reboot\n'
     fi
-    if command -v vulkaninfo &>/dev/null; then
-        VK_GPU="$(vulkaninfo --summary 2>/dev/null | grep "GPU name" | head -1 | cut -d= -f2 | xargs || true)"
-        VK_API="$(vulkaninfo --summary 2>/dev/null | grep "apiVersion" | head -1 | cut -d= -f2 | xargs || true)"
-        if [[ -n "$VK_GPU" ]]; then
-            printf '  Vulkan GPU:    %s\n' "$VK_GPU"
-            [[ -n "$VK_API" ]] && printf '  Vulkan API:    %s\n' "$VK_API"
+    printf '\n'
+    
+    # ── Display ──────────────────────────────────────────────────────────────────
+    printf '%bDisplay / Wayland:%b\n' "$BOLD" "$RESET"
+    if pgrep -x sommelier &>/dev/null; then
+        printf '  Sommelier:     %b✓%b running\n' "$GREEN" "$RESET"
+    else
+        printf '  Sommelier:     %b✗%b not running — restart terminal\n' "$RED" "$RESET"
+    fi
+    printf '  DISPLAY:       %s\n' "${DISPLAY:-not set}"
+    printf '  WAYLAND:       %s\n' "${WAYLAND_DISPLAY:-not set}"
+    printf '  GTK theme:     %s\n' "$(grep gtk-theme-name "${HOME}/.config/gtk-3.0/settings.ini" 2>/dev/null | cut -d= -f2 || echo 'default')"
+    printf '  Xft DPI:       %s\n' "$(grep 'Xft.dpi' "${HOME}/.Xresources" 2>/dev/null | awk '{print $2}' || echo 'default')"
+    printf '  Font:          %s\n' "$(grep gtk-font-name "${HOME}/.config/gtk-3.0/settings.ini" 2>/dev/null | cut -d= -f2 || echo 'default')"
+    printf '\n'
+    
+    # ── Audio ────────────────────────────────────────────────────────────────────
+    printf '%bAudio:%b\n' "$BOLD" "$RESET"
+    if [[ -d /dev/snd ]]; then
+        SND_DEV_COUNT=$(find /dev/snd -maxdepth 1 -not -name snd 2>/dev/null | wc -l)
+        printf '  ALSA devices:  %b✓%b %s device(s)\n' "$GREEN" "$RESET" "$SND_DEV_COUNT"
+    else
+        printf '  ALSA devices:  %b✗%b /dev/snd not found\n' "$RED" "$RESET"
+    fi
+    if [[ -e /dev/snd/pcmC0D0c ]] || [[ -e /dev/snd/pcmC1D0c ]]; then
+        printf '  Microphone:    %b✓%b capture device present\n' "$GREEN" "$RESET"
+    else
+        printf '  Microphone:    %b✗%b not detected — enable in ChromeOS Linux settings\n' "$YELLOW" "$RESET"
+    fi
+    if command -v pactl &>/dev/null; then
+        PA_STATUS="$(pactl info 2>/dev/null | grep "Server Name" | cut -d: -f2 | xargs || true)"
+        if [[ -n "$PA_STATUS" ]]; then
+            printf '  PulseAudio:    %b✓%b %s\n' "$GREEN" "$RESET" "$PA_STATUS"
         else
-            printf '  Vulkan:        not available (virgl does not support Vulkan)\n'
+            printf '  PulseAudio:    %b⚠%b installed but not responding\n' "$YELLOW" "$RESET"
         fi
     fi
-elif [[ -d /dev/dri ]]; then
-    printf '  Render node:   %b⚠ PARTIAL%b (/dev/dri exists, renderD128 missing)\n' "$YELLOW" "$RESET"
-else
-    printf '  Render node:   %b✗ NOT ACTIVE%b\n' "$RED" "$RESET"
-    printf '  Fix:           chrome://flags/#crostini-gpu-support → Enabled → Reboot\n'
-fi
-printf '\n'
-
-# ── Display ──────────────────────────────────────────────────────────────────
-printf '%bDisplay / Wayland:%b\n' "$BOLD" "$RESET"
-if pgrep -x sommelier &>/dev/null; then
-    printf '  Sommelier:     %b✓%b running\n' "$GREEN" "$RESET"
-else
-    printf '  Sommelier:     %b✗%b not running — restart terminal\n' "$RED" "$RESET"
-fi
-printf '  DISPLAY:       %s\n' "${DISPLAY:-not set}"
-printf '  WAYLAND:       %s\n' "${WAYLAND_DISPLAY:-not set}"
-printf '  GTK theme:     %s\n' "$(grep gtk-theme-name "${HOME}/.config/gtk-3.0/settings.ini" 2>/dev/null | cut -d= -f2 || echo 'default')"
-printf '  Xft DPI:       %s\n' "$(grep 'Xft.dpi' "${HOME}/.Xresources" 2>/dev/null | awk '{print $2}' || echo 'default')"
-printf '  Font:          %s\n' "$(grep gtk-font-name "${HOME}/.config/gtk-3.0/settings.ini" 2>/dev/null | cut -d= -f2 || echo 'default')"
-printf '\n'
-
-# ── Audio ────────────────────────────────────────────────────────────────────
-printf '%bAudio:%b\n' "$BOLD" "$RESET"
-if [[ -d /dev/snd ]]; then
-    SND_DEV_COUNT=$(find /dev/snd -maxdepth 1 -not -name snd 2>/dev/null | wc -l)
-    printf '  ALSA devices:  %b✓%b %s device(s)\n' "$GREEN" "$RESET" "$SND_DEV_COUNT"
-else
-    printf '  ALSA devices:  %b✗%b /dev/snd not found\n' "$RED" "$RESET"
-fi
-if [[ -e /dev/snd/pcmC0D0c ]] || [[ -e /dev/snd/pcmC1D0c ]]; then
-    printf '  Microphone:    %b✓%b capture device present\n' "$GREEN" "$RESET"
-else
-    printf '  Microphone:    %b✗%b not detected — enable in ChromeOS Linux settings\n' "$YELLOW" "$RESET"
-fi
-if command -v pactl &>/dev/null; then
-    PA_STATUS="$(pactl info 2>/dev/null | grep "Server Name" | cut -d: -f2 | xargs || true)"
-    if [[ -n "$PA_STATUS" ]]; then
-        printf '  PulseAudio:    %b✓%b %s\n' "$GREEN" "$RESET" "$PA_STATUS"
-    else
-        printf '  PulseAudio:    %b⚠%b installed but not responding\n' "$YELLOW" "$RESET"
+    printf '\n'
+    
+    # ── ChromeOS integration ────────────────────────────────────────────────────
+    printf '%bChromeOS integration:%b\n' "$BOLD" "$RESET"
+    if [[ -d /mnt/chromeos ]]; then
+        mapfile -t _shared_arr < <(find /mnt/chromeos -maxdepth 2 -mindepth 2 -type d 2>/dev/null)
+        SHARED_N=${#_shared_arr[@]}
+        if [[ "$SHARED_N" -gt 0 ]]; then
+            printf '  Shared dirs:   %b✓%b %s folder(s)\n' "$GREEN" "$RESET" "$SHARED_N"
+            for d in "${_shared_arr[@]}"; do
+                [[ -n "$d" ]] && printf '                 └ %s\n' "$d"
+            done
+        else
+            printf '  Shared dirs:   none — share via Files app → right-click → Share with Linux\n'
+        fi
+        unset _shared_arr
     fi
-fi
-printf '\n'
-
-# ── ChromeOS integration ────────────────────────────────────────────────────
-printf '%bChromeOS integration:%b\n' "$BOLD" "$RESET"
-if [[ -d /mnt/chromeos ]]; then
-    SHARED_DIRS=$(find /mnt/chromeos -maxdepth 2 -mindepth 2 -type d 2>/dev/null)
-    SHARED_N=$(echo "$SHARED_DIRS" | grep -c . 2>/dev/null || echo 0)
-    if [[ "$SHARED_N" -gt 0 ]]; then
-        printf '  Shared dirs:   %b✓%b %s folder(s)\n' "$GREEN" "$RESET" "$SHARED_N"
-        echo "$SHARED_DIRS" | while read -r d; do
-            [[ -n "$d" ]] && printf '                 └ %s\n' "$d"
-        done
+    printf '\n'
+    
+    # ── Installed tools ──────────────────────────────────────────────────────────
+    printf '%bInstalled tools:%b\n' "$BOLD" "$RESET"
+    
+    check_tool() {
+        local name="$1" cmd="$2"
+        if command -v "$cmd" &>/dev/null; then
+            local ver
+            ver=$("$cmd" --version 2>&1 | head -1)
+            printf '  %-14s %b✓%b  %s\n' "$name" "$GREEN" "$RESET" "$ver"
+        else
+            printf '  %-14s %b✗%b  not found\n' "$name" "$RED" "$RESET"
+        fi
+    }
+    
+    check_tool "git"         git
+    check_tool "python3"     python3
+    check_tool "pip"         pip3
+    check_tool "node"        node
+    check_tool "npm"         npm
+    check_tool "rustc"       rustc
+    check_tool "cargo"       cargo
+    check_tool "vim"         vim
+    check_tool "curl"        curl
+    check_tool "ripgrep"     rg
+    check_tool "fd"          fd
+    check_tool "fzf"         fzf
+    check_tool "bat"         bat
+    check_tool "tmux"        tmux
+    check_tool "jq"          jq
+    check_tool "glxinfo"     glxinfo
+    check_tool "glmark2"     glmark2
+    check_tool "vulkaninfo"  vulkaninfo
+    check_tool "pactl"       pactl
+    check_tool "pavucontrol" pavucontrol
+    check_tool "flatpak"     flatpak
+    check_tool "code"        code
+    check_tool "firefox-esr" firefox-esr
+    check_tool "thunar"      thunar
+    check_tool "evince"      evince
+    check_tool "eog"         eog
+    check_tool "file-roller" file-roller
+    check_tool "gnome-screenshot" gnome-screenshot
+    printf '\n'
+    
+    # ── Config files ─────────────────────────────────────────────────────────────
+    printf '%bConfig files written:%b\n' "$BOLD" "$RESET"
+    
+    check_config() {
+        local path="$1" desc="$2"
+        if [[ -f "$path" ]]; then
+            printf '  %b✓%b  %-44s %s\n' "$GREEN" "$RESET" "$desc" "$path"
+        else
+            printf '  %b✗%b  %-44s %s\n' "$RED" "$RESET" "$desc" "$path"
+        fi
+    }
+    
+    check_config "${HOME}/.config/environment.d/gpu.conf"       "GPU env"
+    check_config "${HOME}/.config/environment.d/audio.conf"      "Audio env"
+    check_config "${HOME}/.config/environment.d/sommelier.conf"  "Sommelier scaling"
+    check_config "${HOME}/.config/environment.d/qt.conf"         "Qt scaling/theming"
+    check_config "${HOME}/.config/gtk-3.0/settings.ini"          "GTK 3 theme + fonts"
+    check_config "${HOME}/.config/gtk-4.0/settings.ini"          "GTK 4 theme + fonts"
+    check_config "${HOME}/.gtkrc-2.0"                            "GTK 2 theme (legacy)"
+    check_config "${HOME}/.Xresources"                           "Xft DPI + rendering"
+    check_config "${HOME}/.config/fontconfig/fonts.conf"         "Fontconfig OLED AA"
+    check_config "${HOME}/.icons/default/index.theme"            "Cursor theme"
+    check_config "${HOME}/.config/pulse/client.conf"             "PulseAudio client"
+    check_config "/etc/profile.d/crostini-env.sh"                "Shell env + PATH"
+    check_config "/etc/sysctl.d/99-crostini-tuning.conf"         "inotify watchers"
+    if [[ -f "/etc/sysctl.d/99-crostini-memory.conf" ]]; then
+        check_config "/etc/sysctl.d/99-crostini-memory.conf"     "Memory tuning (4 GB)"
     else
-        printf '  Shared dirs:   none — share via Files app → right-click → Share with Linux\n'
+        printf '  %b⚠%b  %-44s %s\n' "$YELLOW" "$RESET" "Memory tuning (4 GB)" "skipped (vm.* read-only in container)"
     fi
-fi
-printf '\n'
-
-# ── Installed tools ──────────────────────────────────────────────────────────
-printf '%bInstalled tools:%b\n' "$BOLD" "$RESET"
-
-check_tool() {
-    local name="$1" cmd="$2"
-    if command -v "$cmd" &>/dev/null; then
-        local ver
-        ver=$("$cmd" --version 2>&1 | head -1)
-        printf '  %-14s %b✓%b  %s\n' "$name" "$GREEN" "$RESET" "$ver"
+    if command -v code &>/dev/null; then
+        check_config "${HOME}/.config/code-flags.conf"           "VS Code Wayland"
+    fi
+    printf '\n'
+    
+    # ── Quick-test commands ──────────────────────────────────────────────────────
+    printf '%bQuick-test commands:%b\n' "$BOLD" "$RESET"
+    printf '  GPU:     glxgears / glmark2-es2-wayland / vulkaninfo --summary\n'
+    printf '  Audio:   pactl info / speaker-test -t wav -c 2 / pavucontrol\n'
+    printf '  Display: xdpyinfo | grep resolution / xrandr\n'
+    printf '  Fonts:   fc-match sans-serif / fc-match monospace\n'
+    printf '\n'
+    
+    # ── Reminders ────────────────────────────────────────────────────────────────
+    printf '%bReminders:%b\n' "$YELLOW" "$RESET"
+    printf '  • Steam is x86-only — will NOT work on this ARM64 device\n'
+    printf '  • Cloud gaming: GeForce NOW / Xbox Cloud Gaming in ChromeOS browser\n'
+    printf '  • Manual .deb downloads: always get the arm64 variant\n'
+    printf '  • Flatpak apps: flatpak install flathub <app-id>\n'
+    printf '  • If GPU not active: reboot entire Chromebook (not just container)\n'
+    printf '\n'
+    
+    printf '%bLog file:%b %s\n' "$BOLD" "$RESET" "$LOG_FILE"
+    
+    # Clean up checkpoint
+    if $DRY_RUN; then
+        log "[DRY-RUN] would remove checkpoint file"
     else
-        printf '  %-14s %b✗%b  not found\n' "$name" "$RED" "$RESET"
+        rm -f "$STEP_FILE"
+        log "Checkpoint file removed. Setup fully complete."
     fi
-}
-
-check_tool "git"         git
-check_tool "python3"     python3
-check_tool "pip"         pip3
-check_tool "node"        node
-check_tool "npm"         npm
-check_tool "rustc"       rustc
-check_tool "cargo"       cargo
-check_tool "vim"         vim
-check_tool "curl"        curl
-check_tool "ripgrep"     rg
-check_tool "fd"          fd
-check_tool "fzf"         fzf
-check_tool "bat"         bat
-check_tool "tmux"        tmux
-check_tool "jq"          jq
-check_tool "glxinfo"     glxinfo
-check_tool "glmark2"     glmark2
-check_tool "vulkaninfo"  vulkaninfo
-check_tool "pactl"       pactl
-check_tool "pavucontrol" pavucontrol
-check_tool "flatpak"     flatpak
-check_tool "code"        code
-check_tool "firefox-esr" firefox-esr
-check_tool "thunar"      thunar
-check_tool "evince"      evince
-check_tool "eog"         eog
-check_tool "file-roller" file-roller
-check_tool "gnome-screenshot" gnome-screenshot
-printf '\n'
-
-# ── Config files ─────────────────────────────────────────────────────────────
-printf '%bConfig files written:%b\n' "$BOLD" "$RESET"
-
-check_config() {
-    local path="$1" desc="$2"
-    if [[ -f "$path" ]]; then
-        printf '  %b✓%b  %-44s %s\n' "$GREEN" "$RESET" "$desc" "$path"
-    else
-        printf '  %b✗%b  %-44s %s\n' "$RED" "$RESET" "$desc" "$path"
-    fi
-}
-
-check_config "${HOME}/.config/environment.d/gpu.conf"       "GPU env"
-check_config "${HOME}/.config/environment.d/audio.conf"      "Audio env"
-check_config "${HOME}/.config/environment.d/sommelier.conf"  "Sommelier scaling"
-check_config "${HOME}/.config/environment.d/qt.conf"         "Qt scaling/theming"
-check_config "${HOME}/.config/gtk-3.0/settings.ini"          "GTK 3 theme + fonts"
-check_config "${HOME}/.config/gtk-4.0/settings.ini"          "GTK 4 theme + fonts"
-check_config "${HOME}/.gtkrc-2.0"                            "GTK 2 theme (legacy)"
-check_config "${HOME}/.Xresources"                           "Xft DPI + rendering"
-check_config "${HOME}/.config/fontconfig/fonts.conf"         "Fontconfig OLED AA"
-check_config "${HOME}/.icons/default/index.theme"            "Cursor theme"
-check_config "${HOME}/.config/pulse/client.conf"             "PulseAudio client"
-check_config "/etc/profile.d/crostini-env.sh"                "Shell env + PATH"
-check_config "/etc/sysctl.d/99-crostini-tuning.conf"         "inotify watchers"
-if [[ -f "/etc/sysctl.d/99-crostini-memory.conf" ]]; then
-    check_config "/etc/sysctl.d/99-crostini-memory.conf"     "Memory tuning (4 GB)"
-else
-    printf '  %b⚠%b  %-44s %s\n' "$YELLOW" "$RESET" "Memory tuning (4 GB)" "skipped (vm.* read-only in container)"
+    
+    printf '\n%bRestart the Terminal app to apply all environment changes.%b\n\n' "$CYAN" "$RESET"
 fi
-if command -v code &>/dev/null; then
-    check_config "${HOME}/.config/code-flags.conf"           "VS Code Wayland"
-fi
-printf '\n'
-
-# ── Quick-test commands ──────────────────────────────────────────────────────
-printf '%bQuick-test commands:%b\n' "$BOLD" "$RESET"
-printf '  GPU:     glxgears / glmark2-es2-wayland / vulkaninfo --summary\n'
-printf '  Audio:   pactl info / speaker-test -t wav -c 2 / pavucontrol\n'
-printf '  Display: xdpyinfo | grep resolution / xrandr\n'
-printf '  Fonts:   fc-match sans-serif / fc-match monospace\n'
-printf '\n'
-
-# ── Reminders ────────────────────────────────────────────────────────────────
-printf '%bReminders:%b\n' "$YELLOW" "$RESET"
-printf '  • Steam is x86-only — will NOT work on this ARM64 device\n'
-printf '  • Cloud gaming: GeForce NOW / Xbox Cloud Gaming in ChromeOS browser\n'
-printf '  • Manual .deb downloads: always get the arm64 variant\n'
-printf '  • Flatpak apps: flatpak install flathub <app-id>\n'
-printf '  • If GPU not active: reboot entire Chromebook (not just container)\n'
-printf '\n'
-
-printf '%bLog file:%b %s\n' "$BOLD" "$RESET" "$LOG_FILE"
-
-# Clean up checkpoint
-if $DRY_RUN; then
-    log "[DRY-RUN] would remove checkpoint file"
-else
-    rm -f "$STEP_FILE"
-    log "Checkpoint file removed. Setup fully complete."
-fi
-
-printf '\n%bRestart the Terminal app to apply all environment changes.%b\n\n' "$CYAN" "$RESET"
 
 exit 0

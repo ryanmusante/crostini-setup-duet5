@@ -5,6 +5,30 @@ crostini-setup-duet5.sh — Crostini post-install bootstrap
 Lenovo IdeaPad Duet 5 Chromebook (82QS0001US / 13Q7C6)
 
 
+2.5.2  2026-03-15
+------------------
+
+  Post-audit fixes (AUDIT-2.5.1.txt):
+
+  - Fix H-1: add || die guards to write_file() and write_file_sudo()
+    for mkdir -p, cat, and sudo tee calls. Previously, failures under
+    set -e would abort with no useful error message.
+  - Fix M-1: help text step 1 now includes "sommelier" to match README
+    and actual preflight checks performed.
+  - Fix M-2: move readonly NODE_MAJOR=22 above the "if command -v node"
+    conditional so it is always declared within the step scope.
+  - Fix M-3: replace deprecated --enable-features=UseOzonePlatform and
+    --ozone-platform=wayland VS Code flags (removed in Electron 28+)
+    with forward-compatible --ozone-platform-hint=auto.
+  - Fix M-4: add non-empty check (-s) on NodeSource GPG keyring after
+    curl|gpg pipeline to catch silent curl failures that leave a 0-byte
+    keyring file.
+  - Fix M-5: add TOFU acknowledgment comment to rustup curl-pipe-shell
+    install pattern.
+  - Fix L-5: remove glmark2 (GLX variant) from GPU_PKGS — Crostini uses
+    Wayland; only glmark2-wayland and glmark2-es2-wayland are relevant.
+  - README: update script line count to 1514.
+
 2.5.1  2026-03-14
 ------------------
 

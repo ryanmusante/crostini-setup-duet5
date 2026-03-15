@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # crostini-setup-duet5.sh — Crostini post-install bootstrap for Lenovo Duet 5 (82QS0001US)
-# Version: 2.5.1
-# Date:    2026-03-14
+# Version: 2.5.2
+# Date:    2026-03-15
 # Arch:    aarch64 / arm64 (Qualcomm Snapdragon 7c Gen 2 — SC7180)
 # Target:  Debian Bookworm container under ChromeOS Crostini
 # Usage:   bash crostini-setup-duet5.sh [--dry-run] [--help] [--version]
@@ -18,7 +18,7 @@ set -euo pipefail
 
 # ── Constants ────────────────────────────────────────────────────────────────
 readonly SCRIPT_NAME="crostini-setup-duet5.sh"
-readonly SCRIPT_VERSION="2.5.1"
+readonly SCRIPT_VERSION="2.5.2"
 readonly EXPECTED_ARCH="aarch64"
 _log_ts="$(date +%Y%m%d-%H%M%S)"
 readonly LOG_FILE="${HOME}/crostini-setup-${_log_ts}.log"
@@ -145,8 +145,8 @@ write_file() {
         cat > /dev/null  # consume stdin
         return 0
     fi
-    mkdir -p "$(dirname "$dest")"
-    cat > "$dest"
+    mkdir -p "$(dirname "$dest")" || die "Cannot create parent dir for $dest"
+    cat > "$dest" || die "Cannot write $dest"
     log "Wrote $dest"
 }
 
@@ -158,8 +158,8 @@ write_file_sudo() {
         cat > /dev/null
         return 0
     fi
-    sudo mkdir -p "$(dirname "$dest")"
-    sudo tee "$dest" > /dev/null
+    sudo mkdir -p "$(dirname "$dest")" || die "Cannot create parent dir for $dest"
+    sudo tee "$dest" > /dev/null || die "Cannot write $dest"
     log "Wrote $dest (sudo)"
 }
 
@@ -193,7 +193,7 @@ OPTIONS:
     --reset      Clear checkpoint and start from step 1
 
 STEPS PERFORMED:
-     1  Preflight checks (arch, Crostini, disk, network, root)
+     1  Preflight checks (arch, Crostini, disk, network, root, sommelier)
      2  ChromeOS integration (GPU flag, microphone, USB, folder sharing,
         port forwarding — auto-opens each settings page)
      3  System update and upgrade
@@ -535,8 +535,7 @@ if should_run_step 6; then
         xdg-desktop-portal
         xdg-desktop-portal-gtk
 
-        # GL benchmark/test tools
-        glmark2
+        # GL benchmark/test tools (Wayland only — Crostini has no native X11)
         glmark2-wayland
         glmark2-es2-wayland
     )
@@ -951,14 +950,19 @@ fi
 if should_run_step 11; then
     step_banner 11 "Node.js LTS (arm64)"
 
+    readonly NODE_MAJOR=22
+
     if command -v node &>/dev/null; then
         log "Node.js already installed: $(node --version)"
     else
-        readonly NODE_MAJOR=22
         log "Installing Node.js ${NODE_MAJOR}.x LTS from NodeSource..."
 
         run sudo mkdir -p /etc/apt/keyrings || die "Cannot create /etc/apt/keyrings"
         run_shell "curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --yes --dearmor -o /etc/apt/keyrings/nodesource.gpg"
+        # Verify keyring is non-empty (curl failure in pipe can leave 0-byte file)
+        if [[ ! -s /etc/apt/keyrings/nodesource.gpg ]]; then
+            die "NodeSource GPG keyring is empty — curl download likely failed"
+        fi
         run_shell "echo 'deb [arch=arm64 signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main' | sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null"
         run sudo apt update  || warn "apt update failed"
         run sudo apt install -y nodejs || die "nodejs install failed — check NodeSource repo setup above"
@@ -990,6 +994,8 @@ if should_run_step 12; then
         log "Rust already installed: $(rustc --version)"
     else
         log "Installing Rust via rustup (non-interactive)..."
+        # TOFU pattern: rustup's installer has no detached signature to verify.
+        # TLS 1.2+ and HTTPS-only mitigate transport-level risks.
         run_shell "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
 
         if [[ -f "${HOME}/.cargo/env" ]]; then
@@ -1092,8 +1098,7 @@ if should_run_step 14; then
     VSCODE_FLAGS="${HOME}/.config/code-flags.conf"
     if [[ ! -f "$VSCODE_FLAGS" ]]; then
         write_file "$VSCODE_FLAGS" <<'EOF'
---enable-features=UseOzonePlatform,WaylandWindowDecorations
---ozone-platform=wayland
+--ozone-platform-hint=auto
 EOF
     else
         log "VS Code flags already exist"

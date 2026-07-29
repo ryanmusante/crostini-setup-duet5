@@ -1,10 +1,6 @@
 # ry-crostini
 
 [![version](https://img.shields.io/badge/version-8.1.42-blue)](CHANGELOG.md)
-[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![bash](https://img.shields.io/badge/bash-5.0%2B-orange)](https://www.gnu.org/software/bash/)
-[![arch](https://img.shields.io/badge/arch-aarch64-lightgrey)](#hardware)
-[![platform](https://img.shields.io/badge/platform-Crostini-yellow)](#hardware)
 
 Crostini post-install bootstrap for the **Lenovo IdeaPad Duet 5 Chromebook**
 (82QS0001US). Provisions a fresh Debian container into a fully configured

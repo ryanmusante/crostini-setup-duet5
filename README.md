@@ -1,6 +1,6 @@
 # ry-crostini
 
-[![version](https://img.shields.io/badge/version-8.1.42-blue)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-8.1.43-blue)](CHANGELOG.md)
 
 Crostini post-install bootstrap for the **Lenovo IdeaPad Duet 5 Chromebook**
 (82QS0001US). Provisions a fresh Debian container into a fully configured
@@ -244,7 +244,7 @@ Nothing the script writes is destructive without a tmpfile-and-rename path, a ba
 | Concurrent-safe | PID-based `mkdir` lock with stale detection |
 | Checkpoint resume | Progress saved after each step to `~/.ry-crostini-checkpoint`; re-run continues from last completed step |
 | No eval | `run()` passes `"$@"` directly; generated systemd unit uses `bash -c` for inline conditional only |
-| Signal handling | Traps INT, TERM, HUP, QUIT; re-raises for correct 128+N exit code; sudo tmpfiles tracked for cleanup |
+| Signal handling | Traps INT, TERM, HUP, QUIT; re-raises for correct 128+N exit code; both plain and sudo write tmpfiles tracked for cleanup |
 | Sudo keepalive | Background `sudo -v` loop every 60 s prevents credential timeout; killed in cleanup |
 
 ### User Experience
@@ -455,7 +455,7 @@ Two techniques for 8-bit and 16-bit cores only (Quick Menu → Overrides → Sav
 
 The `run-x86` wrapper auto-detects ELF architecture and dispatches:
 x86\_64 → box64 (preferred) → `qemu-x86_64`; i386 → `qemu-i386`; unrecognized
-ELF → descriptive error + exit 2. Run `run-x86 --help` to list available backends.
+ELF → descriptive error + exit 2. `run-x86 --help` prints usage and the dispatch order.
 
 **32-bit x86:** not installed by default. Use `box86` + armhf libs, or set
 `BOX64_BOX32=1` in `~/.box64rc` `[default]` for box64's experimental Box32
@@ -535,7 +535,7 @@ For anything that doesn't fit the compatibility tiers above, streaming is the re
 | 1 | ChromeOS browser (GeForce NOW, Xbox Cloud Gaming) | ✅ | Direct V4L2 hardware decode, no VM overhead |
 | 2 | Android Moonlight app (Play Store) | ✅ | Hardware decode; optimal for Sunshine/GameStream hosts |
 | 3 | Chiaki-ng (PS Remote Play) | ✅ | ARM64 Linux AppImage; native Crostini streaming client |
-| — | Amazon Luna (ChromeOS browser) | ⚠ Prime only | Storefront, Bring-Your-Own-Library, and third-party subscriptions discontinued 2026-04-10; a-la-carte/BYOL streaming sunsets 2026-06-10. Remaining value is the Prime-tier + Luna Premium catalogue (~155 mostly older titles). |
+| — | Amazon Luna (ChromeOS browser) | ⚠ Prime only | Storefront, Bring-Your-Own-Library, and third-party subscriptions discontinued 2026-04-10; a-la-carte/BYOL streaming sunsets 2026-06-10. Remaining value is the Prime-tier + Luna Premium catalog (~155 mostly older titles). |
 | — | Moonlight Qt | ⚠ No | arm64 `.deb` available but software decode only (no V4L2 hw accel) |
 | — | Parsec | ✗ No | No ARM64 Linux support |
 | — | Steam Link | ✗ No | No ARM64 Linux support |
